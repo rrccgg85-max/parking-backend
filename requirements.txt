@@ -1,7 +1,3 @@
 fastapi
 uvicorn
-pdfplumber
-pdf2image
-pytesseract
-pillow
 python-multipart

@@ -11,14 +11,15 @@ const upload = multer({ storage: multer.memoryStorage() });
 function parseAmountFromText(text) {
   if (!text) return 0.0;
 
-  // จัดการช่องว่างตัวเลข
+  // ทำความสะอาดข้อความ ตัดช่องว่างระหว่างตัวเลข
   let cleaned = text.replace(/(\d)\s+(\d)/g, '$1$2');
   cleaned = cleaned.replace(/(\d)\s*\.\s*(\d)/g, '$1.$2');
 
+  // 1. ค้นหาจากคีย์เวิร์ดที่มักอยู่ใกล้กับยอดเงิน
   const patterns = [
     /รวมทั้งสิ้น\s*([0-9,]+(?:\.[0-9]{2})?)/i,
     /([0-9,]+(?:\.[0-9]{2})?)\s*บาท/i,
-    /(?:รวม|ยอดชำระ|สุทธิ|total|amount)[\s:]*([0-9,]+(?:\.[0-9]{2})?)/i
+    /(?:รวม|ยอดชำระ|สุทธิ|จำนวนเงิน|total|amount|price)[\s:]*([0-9,]+(?:\.[0-9]{2})?)/i
   ];
 
   for (const pattern of patterns) {
@@ -29,17 +30,27 @@ function parseAmountFromText(text) {
     }
   }
 
+  // 2. ถ้าไม่เจอคีย์เวิร์ด ให้ดึงตัวเลขที่มีทศนิยม .00 หรือ .xx ตัวสุดท้ายในเอกสารแทน
   const allDecimals = cleaned.match(/(\d{1,3}(?:,\d{3})*\.\d{2})/g);
   if (allDecimals && allDecimals.length > 0) {
     const lastVal = parseFloat(allDecimals[allDecimals.length - 1].replace(/,/g, ''));
     if (lastVal > 0) return lastVal;
   }
 
+  // 3. ถ้ายังไม่เจออีก ให้หาตัวเลขจำนวนเต็มที่มีค่ามากที่สุดในเอกสาร (เผื่อเป็นยอดรวม)
+  const allNumbers = cleaned.match(/\b\d{1,6}\b/g);
+  if (allNumbers && allNumbers.length > 0) {
+    const numbers = allNumbers.map(n => parseInt(n, 10)).filter(n => n > 0);
+    if (numbers.length > 0) {
+      return Math.max(...numbers);
+    }
+  }
+
   return 0.0;
 }
 
 app.get('/', (req, res) => {
-  res.json({ status: 'online', mode: 'stable_node_server' });
+  res.json({ status: 'online', mode: 'flexible_parser' });
 });
 
 app.post('/extract', upload.single('file'), async (req, res) => {

@@ -2,7 +2,8 @@ import os
 import json
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 app = FastAPI()
 
@@ -14,10 +15,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ดึง API Key จากระบบ Render Environment Variable
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
 
 @app.get("/")
 def read_root():
@@ -33,12 +31,12 @@ async def extract_amount(file: UploadFile = File(...)):
         
         mime_type = file.content_type
         if not mime_type or mime_type == "application/octet-stream":
-            if file.filename.endswith(".pdf"):
+            if file.filename.lower().endswith(".pdf"):
                 mime_type = "application/pdf"
             else:
                 mime_type = "image/jpeg"
 
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        client = genai.Client(api_key=GEMINI_API_KEY)
         
         prompt = """
         Analyze this receipt document and extract the total paid amount (รวมทั้งสิ้น / ยอดชำระ).
@@ -47,10 +45,16 @@ async def extract_amount(file: UploadFile = File(...)):
         Do not include any formatting or markdown outside JSON.
         """
 
-        response = model.generate_content([
-            prompt,
-            {"mime_type": mime_type, "data": contents}
-        ])
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[
+                types.Part.from_bytes(
+                    data=contents,
+                    mime_type=mime_type,
+                ),
+                prompt,
+            ]
+        )
 
         clean_res = response.text.replace("```json", "").replace("```", "").strip()
         data = json.loads(clean_res)

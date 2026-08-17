@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบอ่านสลิปค่าจอดรถ</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen flex items-center justify-center p-4">
+
+    <div class="bg-gray-800 p-8 rounded-xl shadow-2xl max-w-md w-full border border-gray-700">
+        <h1 class="text-2xl font-bold text-center mb-6 text-blue-400">ระบบประมวลผลสลิป/ใบเสร็จ</h1>
+        
+        <form id="uploadForm" class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium mb-2 text-gray-300">อัปโหลดสลิปหรือใบเสร็จ (JPG, PNG, PDF)</label>
+                <input type="file" id="fileInput" accept="image/*,.pdf" required
+                    class="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer bg-gray-700 rounded-lg">
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium mb-1 text-gray-300">ยอดเงินค่าจอดรถ (บาท)</label>
+                <input type="number" id="amountInput" step="0.01" placeholder="0.00"
+                    class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500 font-mono text-lg">
+            </div>
+
+            <button type="submit" id="submitBtn"
+                class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg transition duration-200">
+                ส่งข้อมูล
+            </button>
+        </form>
+
+        <div id="loading" class="hidden mt-6 text-center">
+            <div class="inline-block animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500 mb-2"></div>
+            <p class="text-blue-400 text-sm">กำลังอ่านยอดเงินด้วย AI...</p>
+            <p class="text-gray-400 text-xs mt-1">ระบบกำลังส่งไฟล์ไปประมวลผลที่ Backend</p>
+        </div>
+    </div>
+
+    <script>
+        // เปลี่ยนเป็น URL จริงบน Render ของคุณ
+        const BACKEND_URL = "https://parking-backend-o2e3.onrender.com";
+
+        const fileInput = document.getElementById('fileInput');
+        const amountInput = document.getElementById('amountInput');
+        const loading = document.getElementById('loading');
+        const submitBtn = document.getElementById('submitBtn');
+
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            loading.classList.remove('hidden');
+            submitBtn.disabled = true;
+
+            try {
+                const response = await fetch(`${BACKEND_URL}/extract`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+                console.log("Backend response:", data);
+
+                if (data.success && data.amount > 0) {
+                    amountInput.value = data.amount.toFixed(2);
+                } else {
+                    const userAmount = prompt("ระบบไม่พบบทสรุปยอดเงินอัตโนมัติ โปรดระบุยอดเงินค่าจอดรถ (บาท):", "0.00");
+                    if (userAmount !== null) {
+                        amountInput.value = parseFloat(userAmount) || 0;
+                    }
+                }
+            } catch (err) {
+                console.error("Fetch Error:", err);
+                alert("เกิดข้อผิดพลาดในการเชื่อมต่อกับ Backend");
+            } finally {
+                loading.classList.add('hidden');
+                submitBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>

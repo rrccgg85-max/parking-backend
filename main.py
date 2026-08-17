@@ -1,11 +1,10 @@
 import os
 import json
 import re
-import base64
-import urllib.request
-import urllib.error
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from google import genai
+from google.genai import types
 
 app = FastAPI()
 
@@ -21,21 +20,19 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 @app.get("/")
 def read_root():
-    return {"status": "online", "mode": "Direct REST API"}
+    return {"status": "online"}
 
 @app.post("/extract")
 async def extract_amount(file: UploadFile = File(...)):
     try:
         if not GEMINI_API_KEY:
-            print("Error: GEMINI_API_KEY is missing!")
+            print("Error: GEMINI_API_KEY is not set")
             return {"success": False, "error": "GEMINI_API_KEY is not set", "amount": 0.0}
 
         contents = await file.read()
         if not contents:
             return {"success": False, "error": "Uploaded file is empty", "amount": 0.0}
 
-        base64_data = base64.b64encode(contents).decode('utf-8')
-        
         filename_lower = file.filename.lower()
         if filename_lower.endswith(".pdf"):
             mime_type = "application/pdf"
@@ -48,8 +45,8 @@ async def extract_amount(file: UploadFile = File(...)):
 
         print(f"Processing file: {file.filename} with mime_type: {mime_type}")
 
-        # อัปเดต URL ใช้ Endpoint gemini-2.5-flash
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+        # เรียกใช้ SDK ล่าสุด
+        client = genai.Client(api_key=GEMINI_API_KEY)
         
         prompt = (
             "Analyze this receipt or slip image/PDF carefully and extract the final total paid amount "
@@ -58,42 +55,18 @@ async def extract_amount(file: UploadFile = File(...)):
             "If no amount can be extracted or found, return {\"amount\": 0.0}."
         )
 
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {"text": prompt},
-                        {
-                            "inline_data": {
-                                "mime_type": mime_type,
-                                "data": base64_data
-                            }
-                        }
-                    ]
-                }
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[
+                types.Part.from_bytes(
+                    data=contents,
+                    mime_type=mime_type,
+                ),
+                prompt
             ]
-        }
-
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode('utf-8'),
-            headers={'Content-Type': 'application/json'},
-            method='POST'
         )
 
-        try:
-            with urllib.request.urlopen(req) as response:
-                res_data = json.loads(response.read().decode('utf-8'))
-        except urllib.error.HTTPError as http_err:
-            err_body = http_err.read().decode('utf-8')
-            print(f"Gemini API HTTP Error ({http_err.code}): {err_body}")
-            return {"success": False, "error": f"API Error: {http_err.code} - {err_body}", "amount": 0.0}
-
-        candidates = res_data.get('candidates', [])
-        if not candidates:
-            return {"success": False, "error": "No response candidate from Gemini", "amount": 0.0}
-
-        res_text = candidates[0]['content']['parts'][0]['text'].strip()
+        res_text = response.text.strip()
         print(f"Gemini Raw Response: {res_text}")
 
         match = re.search(r'\{.*\}', res_text, re.DOTALL)

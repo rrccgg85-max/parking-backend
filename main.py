@@ -1,9 +1,10 @@
 import os
 import json
 import re
+import base64
+import urllib.request
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-import google.generativeai as genai
 
 app = FastAPI()
 
@@ -16,12 +17,10 @@ app.add_middleware(
 )
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
 
 @app.get("/")
 def read_root():
-    return {"status": "online", "mode": "Gemini AI Vision"}
+    return {"status": "online", "mode": "Direct REST API"}
 
 @app.post("/extract")
 async def extract_amount(file: UploadFile = File(...)):
@@ -30,14 +29,13 @@ async def extract_amount(file: UploadFile = File(...)):
             return {"success": False, "error": "GEMINI_API_KEY is not set", "amount": 0.0}
 
         contents = await file.read()
+        base64_data = base64.b64encode(contents).decode('utf-8')
         
-        # กำหนดชนิดไฟล์
         mime_type = file.content_type or "image/jpeg"
         if file.filename.lower().endswith(".pdf"):
             mime_type = "application/pdf"
 
-        # รัน Gemini Flash
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
         
         prompt = """
         Analyze this receipt document and extract the total paid amount (รวมทั้งสิ้น / ยอดชำระ).
@@ -45,13 +43,34 @@ async def extract_amount(file: UploadFile = File(...)):
         If you cannot find any amount, return {"amount": 0.0}
         """
 
-        response = model.generate_content([
-            prompt,
-            {"mime_type": mime_type, "data": contents}
-        ])
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt},
+                        {
+                            "inline_data": {
+                                "mime_type": mime_type,
+                                "data": base64_data
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
 
-        # แกะข้อความ JSON ออกมาอย่างปลอดภัย
-        res_text = response.text.strip()
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+
+        with urllib.request.urlopen(req) as response:
+            res_data = json.loads(response.read().decode('utf-8'))
+            
+        res_text = res_data['candidates'][0]['content']['parts'][0]['text'].strip()
+        
         match = re.search(r'\{.*\}', res_text, re.DOTALL)
         if match:
             data = json.loads(match.group())

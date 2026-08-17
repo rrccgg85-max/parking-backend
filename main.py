@@ -20,26 +20,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def preprocess_image_for_ocr(img: Image.Image) -> Image.Image:
-    """ปรับความคมชัดและแปลงเป็น ขาว-ดำ เพื่อให้ Tesseract แกะตัวอักษรสีฟ้า/หนาได้แม่นยำขึ้น"""
-    img = img.convert("L")  # แปลงเป็น Grayscale
-    enhancer = ImageEnhance.Contrast(img)
-    return enhancer.enhance(2.0)  # เพิ่ม Contrast 2 เท่า
+def prepare_image(img: Image.Image) -> Image.Image:
+    """แปลงภาพที่มี Alpha Channel (โปร่งใส) ให้มีพื้นหลังสีขาวเสมอ ป้องกันภาพดำสนิท"""
+    if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        if img.mode != "RGBA":
+            img = img.convert("RGBA")
+        bg.paste(img, mask=img.split()[3])
+        return bg
+    return img.convert("RGB")
 
 def parse_amount_from_text(text: str) -> float:
     if not text:
         return 0.0
 
-    # 1. ทำความสะอาดช่องว่างส่วนเกินที่ OCR มักทำหลุด เช่น '4 0 . 0 0' -> '40.00'
+    # รวมช่องว่างที่โดนแยก เช่น '4 0 . 0 0' -> '40.00'
     cleaned = re.sub(r'(\d)\s+(\d)', r'\1\2', text)
     cleaned = re.sub(r'(\d)\s*\.\s*(\d)', r'\1.\2', cleaned)
 
-    # 2. Regex ค้นหาตามลำดับความสำคัญ
     patterns = [
-        r'รวมทั้งสิ้น\s*([0-9,]+(?:\.[0-9]{2})?)',           # เช่น "รวมทั้งสิ้น 40.00"
-        r'([0-9,]+(?:\.[0-9]{2})?)\s*บาท',                   # เช่น "40.00 บาท"
-        r'(?:ยอดชำระ|สุทธิ|total|amount)[\s:]*([0-9,]+(?:\.[0-9]{2})?)', # คำสำคัญอื่นๆ
-        r'(\d{1,3}(?:,\d{3})*\.\d{2})'                       # ตัวเลขทศนิยม .XX ทั่วไป
+        r'รวมทั้งสิ้น\s*([0-9,]+(?:\.[0-9]{2})?)',
+        r'([0-9,]+(?:\.[0-9]{2})?)\s*บาท',
+        r'(?:ยอดชำระ|สุทธิ|total|amount)[\s:]*([0-9,]+(?:\.[0-9]{2})?)',
+        r'(\d{1,3}(?:,\d{3})*\.\d{2})'
     ]
 
     for pattern in patterns:
@@ -57,7 +60,7 @@ def parse_amount_from_text(text: str) -> float:
 
 @app.get("/")
 def read_root():
-    return {"status": "online", "mode": "standalone_ocr_v6"}
+    return {"status": "online", "mode": "standalone_ocr_v7"}
 
 @app.post("/extract")
 async def extract_amount(file: UploadFile = File(...)):
@@ -75,7 +78,7 @@ async def extract_amount(file: UploadFile = File(...)):
         is_pdf = filename.endswith(".pdf") or "pdf" in content_type or contents.startswith(b"%PDF")
 
         if is_pdf:
-            # 1. ดึงข้อความดิจิทัลจาก PDF ก่อน
+            # 1. อ่าน Text ดั้งเดิมจาก PDF
             try:
                 pdf_reader = pypdf.PdfReader(io.BytesIO(contents))
                 for page in pdf_reader.pages:
@@ -83,41 +86,37 @@ async def extract_amount(file: UploadFile = File(...)):
                     if t:
                         extracted_text += t + "\n"
             except Exception as e:
-                print(f"pypdf extract error: {e}")
+                print(f"pypdf error: {e}")
 
-            # 2. Render หน้า PDF เป็นรูปภาพความละเอียดสูง (3x) + Preprocessing + OCR
+            # 2. Render หน้า PDF เป็นรูปภาพ + ใส่พื้นหลังสีขาว + OCR
             try:
                 pdf_doc = pdfium.PdfDocument(contents)
                 for page in pdf_doc:
-                    pil_img = page.render(scale=3).to_pil()
-                    processed_img = preprocess_image_for_ocr(pil_img)
+                    raw_pil = page.render(scale=3).to_pil()
+                    img = prepare_image(raw_pil)
                     
                     try:
-                        ocr_t = pytesseract.image_to_string(processed_img, lang='tha+eng', config='--psm 6')
+                        txt = pytesseract.image_to_string(img, lang='tha+eng')
                     except Exception:
-                        ocr_t = pytesseract.image_to_string(processed_img, lang='eng', config='--psm 6')
+                        txt = pytesseract.image_to_string(img, lang='eng')
                     
-                    extracted_text += "\n" + ocr_t
+                    if txt.strip():
+                        extracted_text += "\n" + txt
             except Exception as pdfium_err:
-                print(f"pdfium render error: {pdfium_err}")
+                print(f"pdfium error: {pdfium_err}")
 
         else:
-            # 3. กรณีเป็นไฟล์รูปภาพ (JPG, PNG, HEIC)
+            # 3. กรณีเป็นไฟล์รูปภาพ
             try:
-                image = Image.open(io.BytesIO(contents))
-                if image.mode != "RGB":
-                    image = image.convert("RGB")
-                
-                processed_img = preprocess_image_for_ocr(image)
-                
+                raw_img = Image.open(io.BytesIO(contents))
+                img = prepare_image(raw_img)
                 try:
-                    extracted_text = pytesseract.image_to_string(processed_img, lang='tha+eng', config='--psm 6')
+                    extracted_text = pytesseract.image_to_string(img, lang='tha+eng')
                 except Exception:
-                    extracted_text = pytesseract.image_to_string(processed_img, lang='eng', config='--psm 6')
+                    extracted_text = pytesseract.image_to_string(img, lang='eng')
             except UnidentifiedImageError:
                 return {"success": False, "error": "รูปแบบรูปภาพไม่ถูกต้อง", "amount": 0.0}
 
-        # สกัดยอดเงินจากข้อความที่ได้
         extracted_amount = parse_amount_from_text(extracted_text)
 
         return {

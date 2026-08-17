@@ -27,17 +27,15 @@ def read_root():
 async def extract_amount(file: UploadFile = File(...)):
     try:
         if not GEMINI_API_KEY:
-            print("Error: GEMINI_API_KEY is missing!")
+            print("Error: GEMINI_API_KEY is not set")
             return {"success": False, "error": "GEMINI_API_KEY is not set", "amount": 0.0}
 
-        # อ่านข้อมูลไฟล์รูปภาพ/เอกสาร
         contents = await file.read()
         if not contents:
             return {"success": False, "error": "Uploaded file is empty", "amount": 0.0}
 
         base64_data = base64.b64encode(contents).decode('utf-8')
         
-        # ตรวจสอบและระบุ MIME Type ให้ถูกต้อง
         filename_lower = file.filename.lower()
         if filename_lower.endswith(".pdf"):
             mime_type = "application/pdf"
@@ -52,8 +50,8 @@ async def extract_amount(file: UploadFile = File(...)):
 
         print(f"Processing file: {file.filename} with mime_type: {mime_type}")
 
-        # เรียกใช้งาน Gemini 2.5 Flash REST API
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+        # **เปลี่ยนเป็น gemini-1.5-flash**
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
         
         prompt = (
             "Analyze this receipt or slip image carefully and extract the final total paid amount "
@@ -96,7 +94,6 @@ async def extract_amount(file: UploadFile = File(...)):
             print(f"Gemini API HTTP Error: {err_msg}")
             return {"success": False, "error": f"API Error: {http_err.code}", "amount": 0.0}
 
-        # สกัดข้อความคำตอบจาก Gemini
         candidates = res_data.get('candidates', [])
         if not candidates:
             return {"success": False, "error": "No response candidate from Gemini", "amount": 0.0}
@@ -104,7 +101,6 @@ async def extract_amount(file: UploadFile = File(...)):
         res_text = candidates[0]['content']['parts'][0]['text'].strip()
         print(f"Gemini Raw Response: {res_text}")
 
-        # ใช้ Regex ค้นหาโครงสร้าง JSON ในคำตอบ
         match = re.search(r'\{.*\}', res_text, re.DOTALL)
         if match:
             json_str = match.group()

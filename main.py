@@ -27,7 +27,7 @@ def read_root():
 async def extract_amount(file: UploadFile = File(...)):
     try:
         if not GEMINI_API_KEY:
-            print("Error: GEMINI_API_KEY is not set")
+            print("Error: GEMINI_API_KEY is missing!")
             return {"success": False, "error": "GEMINI_API_KEY is not set", "amount": 0.0}
 
         contents = await file.read()
@@ -48,11 +48,11 @@ async def extract_amount(file: UploadFile = File(...)):
 
         print(f"Processing file: {file.filename} with mime_type: {mime_type}")
 
-        # ใช้ Endpoint และ Model ล่าสุด
+        # อัปเดต URL ใช้ Endpoint gemini-2.5-flash
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
         
         prompt = (
-            "Analyze this receipt or slip image carefully and extract the final total paid amount "
+            "Analyze this receipt or slip image/PDF carefully and extract the final total paid amount "
             "(เช่น จำนวนเงิน, ยอดชำระ, รวมทั้งสิ้น, Net Total, Grand Total).\n"
             "Respond ONLY with a valid JSON object matching this exact format: {\"amount\": 150.00}.\n"
             "If no amount can be extracted or found, return {\"amount\": 0.0}."

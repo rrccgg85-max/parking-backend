@@ -7,7 +7,7 @@ import pytesseract
 import pypdf
 import pillow_heif
 
-# ลงทะเบียนตัวอ่านไฟล์ HEIC (สำหรับภาพจาก iPhone)
+# ลงทะเบียนรองรับภาพ HEIC จาก iPhone
 pillow_heif.register_heif_opener()
 
 app = FastAPI()
@@ -22,7 +22,7 @@ app.add_middleware(
 
 @app.get("/")
 def read_root():
-    return {"status": "online", "mode": "standalone_ocr_v3"}
+    return {"status": "online", "mode": "standalone_ocr_v4"}
 
 @app.post("/extract")
 async def extract_amount(file: UploadFile = File(...)):
@@ -37,19 +37,37 @@ async def extract_amount(file: UploadFile = File(...)):
         content_type = (file.content_type or "").lower()
         extracted_text = ""
 
-        # 1. เช็คว่าเป็นไฟล์ PDF จาก Header (%PDF) หรือนามสกุล
-        if filename.endswith(".pdf") or "pdf" in content_type or contents.startswith(b"%PDF"):
+        # ตรวจสอบว่าเป็นไฟล์ PDF หรือไม่
+        is_pdf = filename.endswith(".pdf") or "pdf" in content_type or contents.startswith(b"%PDF")
+
+        if is_pdf:
+            # 1. ประมวลผลไฟล์ PDF
             try:
                 pdf_reader = pypdf.PdfReader(io.BytesIO(contents))
+                
+                # 1.1 อ่านข้อความจาก PDF ดั้งเดิม
                 for page in pdf_reader.pages:
                     text = page.extract_text()
                     if text:
                         extracted_text += text + "\n"
-            except Exception as pdf_err:
-                print(f"PDF extract error: {pdf_err}")
 
-        # 2. กรณีเป็นไฟล์รูปภาพ (JPG, PNG, WEBP, HEIC)
-        if not extracted_text:
+                # 1.2 หากเป็น Scanned PDF (ไม่มี Text) ให้แกะภาพใน PDF มาทำ OCR
+                if not extracted_text.strip():
+                    for page in pdf_reader.pages:
+                        for img_file in page.images:
+                            try:
+                                image = Image.open(io.BytesIO(img_file.data))
+                                if image.mode != "RGB":
+                                    image = image.convert("RGB")
+                                txt = pytesseract.image_to_string(image, lang='tha+eng')
+                                extracted_text += txt + "\n"
+                            except Exception as img_ocr_err:
+                                print(f"Error OCR image inside PDF: {img_ocr_err}")
+            except Exception as pdf_err:
+                return {"success": False, "error": f"อ่านไฟล์ PDF ไม่สำเร็จ: {str(pdf_err)}", "amount": 0.0}
+
+        else:
+            # 2. ประมวลผลไฟล์รูปภาพ (JPG, PNG, WEBP, HEIC)
             try:
                 image = Image.open(io.BytesIO(contents))
                 if image.mode != "RGB":
@@ -59,10 +77,11 @@ async def extract_amount(file: UploadFile = File(...)):
                     extracted_text = pytesseract.image_to_string(image, lang='tha+eng')
                 except Exception:
                     extracted_text = pytesseract.image_to_string(image, lang='eng')
+
             except UnidentifiedImageError:
                 return {
                     "success": False, 
-                    "error": "รูปแบบไฟล์ไม่รองรับ โปรดอัปโหลดไฟล์ JPG, PNG, HEIC หรือ PDF", 
+                    "error": "ไม่สามารถอ่านไฟล์รูปภาพนี้ได้ โปรดใช้อัปโหลดไฟล์ JPG, PNG หรือ PDF มาตรฐาน", 
                     "amount": 0.0
                 }
             except Exception as img_err:

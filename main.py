@@ -49,19 +49,39 @@ async def extract_amount(file: UploadFile = File(...)):
             "Return ONLY a JSON object: {\"amount\": 150.00}. If not found, return {\"amount\": 0.0}."
         )
 
-        # อัปเดตชื่อโมเดลเป็น gemini-1.5-flash
-        response = client.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=[
-                types.Part.from_bytes(
-                    data=contents,
-                    mime_type=mime_type,
-                ),
-                prompt
-            ]
-        )
+        # รายชื่อโมเดลสำรองเรียงลำดับความใหม่
+        available_models = [
+            'gemini-2.5-flash',
+            'gemini-2.0-flash',
+            'gemini-1.5-flash-latest'
+        ]
 
-        res_text = response.text.strip() if response.text else ""
+        response = None
+        last_error = ""
+
+        # ลูปทดสอบยิง API ทีละโมเดลจนกว่าจะสำเร็จ
+        for model_name in available_models:
+            try:
+                print(f"Trying model: {model_name}...")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[
+                        types.Part.from_bytes(data=contents, mime_type=mime_type),
+                        prompt
+                    ]
+                )
+                if response and response.text:
+                    print(f"Successfully used model: {model_name}")
+                    break
+            except Exception as e:
+                last_error = str(e)
+                print(f"Model {model_name} failed: {last_error}")
+                continue
+
+        if not response or not response.text:
+            return {"success": False, "error": f"All models failed. Last error: {last_error}", "amount": 0.0}
+
+        res_text = response.text.strip()
         match = re.search(r'\{.*\}', res_text, re.DOTALL)
         
         if match:

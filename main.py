@@ -42,7 +42,6 @@ async def extract_amount(file: UploadFile = File(...)):
         else:
             mime_type = "image/jpeg"
 
-        # เรียกใช้ Client จาก SDK ใหม่
         client = genai.Client(api_key=GEMINI_API_KEY)
         
         prompt = (
@@ -50,9 +49,9 @@ async def extract_amount(file: UploadFile = File(...)):
             "Return ONLY a JSON object: {\"amount\": 150.00}. If not found, return {\"amount\": 0.0}."
         )
 
-        # ใช้ gemini-2.5-flash ซึ่งเป็นโมเดลมาตรฐานหลัก
+        # อัปเดตชื่อโมเดลเป็น gemini-1.5-flash
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-1.5-flash',
             contents=[
                 types.Part.from_bytes(
                     data=contents,

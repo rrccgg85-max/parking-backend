@@ -22,17 +22,6 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 def read_root():
     return {"status": "online"}
 
-@app.get("/list-models")
-def list_models():
-    if not GEMINI_API_KEY:
-        return {"error": "GEMINI_API_KEY missing"}
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        models = [m.name for m in client.models.list()]
-        return {"available_models": models}
-    except Exception as e:
-        return {"error": str(e)}
-
 @app.post("/extract")
 async def extract_amount(file: UploadFile = File(...)):
     try:
@@ -55,48 +44,43 @@ async def extract_amount(file: UploadFile = File(...)):
 
         client = genai.Client(api_key=GEMINI_API_KEY)
 
-        # 1. ค้นหารายชื่อโมเดลจริงที่ API Key นี้รองรับให้อัตโนมัติ
-        model_to_use = None
-        try:
-            available_models = [m.name for m in client.models.list()]
-            print(f"[DEBUG] Available models: {available_models}")
-
-            for m_name in available_models:
-                clean_name = m_name.replace("models/", "")
-                if "flash" in clean_name and "embed" not in clean_name and "imagen" not in clean_name:
-                    model_to_use = clean_name
-                    break
-
-            if not model_to_use and available_models:
-                for m_name in available_models:
-                    clean_name = m_name.replace("models/", "")
-                    if "embed" not in clean_name and "imagen" not in clean_name:
-                        model_to_use = clean_name
-                        break
-        except Exception as list_err:
-            print(f"[WARN] Failed to list models: {list_err}")
-
-        if not model_to_use:
-            model_to_use = "gemini-2.5-flash"
-
-        print(f"[INFO] Dynamically selected model: {model_to_use}")
+        # รายชื่อโมเดลมาตรฐานที่ใช้งานได้แน่นอน (ตัด gemini-2.5-flash ออก)
+        candidate_models = [
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-8b",
+            "gemini-1.5-pro"
+        ]
 
         prompt = (
             "Extract the final total paid amount from this receipt/slip. "
             "Return ONLY a JSON object: {\"amount\": 150.00}. If not found, return {\"amount\": 0.0}."
         )
 
-        # 2. เรียกใช้งานโมเดลที่ค้นพบ
-        response = client.models.generate_content(
-            model=model_to_use,
-            contents=[
-                types.Part.from_bytes(data=contents, mime_type=mime_type),
-                prompt
-            ]
-        )
+        response = None
+        last_error = ""
+
+        # รันยิง API จริงทีละโมเดล หากโมเดลไหนเกิด error จะสลับไปตัวถัดไปทันที
+        for model_name in candidate_models:
+            try:
+                print(f"[TRYING] Model: {model_name}")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[
+                        types.Part.from_bytes(data=contents, mime_type=mime_type),
+                        prompt
+                    ]
+                )
+                if response and response.text:
+                    print(f"[SUCCESS] Successfully processed with model: {model_name}")
+                    break
+            except Exception as e:
+                last_error = str(e)
+                print(f"[FAIL] Model {model_name} failed: {last_error}")
+                continue
 
         if not response or not response.text:
-            return {"success": False, "error": "No response text received from model", "amount": 0.0}
+            return {"success": False, "error": f"All models failed. Last error: {last_error}", "amount": 0.0}
 
         res_text = response.text.strip()
         match = re.search(r'\{.*\}', res_text, re.DOTALL)

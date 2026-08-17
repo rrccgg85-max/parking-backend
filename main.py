@@ -1,10 +1,9 @@
-import os
-import json
+import io
 import re
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from google import genai
-from google.genai import types
+from PIL import Image
+import pytesseract
 
 app = FastAPI()
 
@@ -16,8 +15,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
 @app.get("/")
 def read_root():
     return {"status": "online"}
@@ -25,78 +22,32 @@ def read_root():
 @app.post("/extract")
 async def extract_amount(file: UploadFile = File(...)):
     try:
-        if not GEMINI_API_KEY:
-            return {"success": False, "error": "GEMINI_API_KEY is missing", "amount": 0.0}
-
         contents = await file.read()
         if not contents:
             return {"success": False, "error": "File is empty", "amount": 0.0}
 
-        filename_lower = (file.filename or "").lower()
-        if filename_lower.endswith(".pdf"):
-            mime_type = "application/pdf"
-        elif filename_lower.endswith(".png"):
-            mime_type = "image/png"
-        elif filename_lower.endswith(".webp"):
-            mime_type = "image/webp"
-        else:
-            mime_type = "image/jpeg"
+        # อ่านรูปภาพด้วย Pillow
+        image = Image.open(io.BytesIO(contents))
 
-        client = genai.Client(api_key=GEMINI_API_KEY)
+        # แปลงภาพเป็นข้อความ (อ่านทั้งภาษาไทยและอังกฤษ)
+        extracted_text = pytesseract.image_to_string(image, lang='tha+eng')
 
-        # รายชื่อโมเดลมาตรฐานที่ใช้งานได้แน่นอน (ตัด gemini-2.5-flash ออก)
-        candidate_models = [
-            "gemini-2.0-flash",
-            "gemini-1.5-flash",
-            "gemini-1.5-flash-8b",
-            "gemini-1.5-pro"
-        ]
+        # ค้นหาแพทเทิร์นตัวเลขทศนิยม (เช่น 150.00 หรือ 1,250.50)
+        # มุ่งเป้าบรรทัดที่มีคำว่า จำนวนเงิน / Baht / Total หรือตัวเลขท้ายๆ สลิป
+        amount_matches = re.findall(r'(\d{1,3}(?:,\d{3})*\.\d{2})', extracted_text)
 
-        prompt = (
-            "Extract the final total paid amount from this receipt/slip. "
-            "Return ONLY a JSON object: {\"amount\": 150.00}. If not found, return {\"amount\": 0.0}."
-        )
-
-        response = None
-        last_error = ""
-
-        # รันยิง API จริงทีละโมเดล หากโมเดลไหนเกิด error จะสลับไปตัวถัดไปทันที
-        for model_name in candidate_models:
-            try:
-                print(f"[TRYING] Model: {model_name}")
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=[
-                        types.Part.from_bytes(data=contents, mime_type=mime_type),
-                        prompt
-                    ]
-                )
-                if response and response.text:
-                    print(f"[SUCCESS] Successfully processed with model: {model_name}")
-                    break
-            except Exception as e:
-                last_error = str(e)
-                print(f"[FAIL] Model {model_name} failed: {last_error}")
-                continue
-
-        if not response or not response.text:
-            return {"success": False, "error": f"All models failed. Last error: {last_error}", "amount": 0.0}
-
-        res_text = response.text.strip()
-        match = re.search(r'\{.*\}', res_text, re.DOTALL)
-        
-        if match:
-            data = json.loads(match.group())
-            extracted_amount = float(data.get("amount", 0.0))
-        else:
-            extracted_amount = 0.0
+        extracted_amount = 0.0
+        if amount_matches:
+            # ดึงตัวเลขทศนิยมตัวสุดท้ายที่พบในสลิป (ซึ่งมักจะเป็นยอดเงินสุทธิ)
+            clean_amount = amount_matches[-1].replace(',', '')
+            extracted_amount = float(clean_amount)
 
         return {
             "success": True if extracted_amount > 0 else False,
             "amount": extracted_amount,
-            "filename": file.filename
+            "filename": file.filename,
+            "raw_text": extracted_text[:200] # ส่งข้อความตัวอย่างกลับไปดูดิบๆ ได้
         }
 
     except Exception as e:
-        print(f"Error: {str(e)}")
         return {"success": False, "error": str(e), "amount": 0.0}

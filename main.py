@@ -43,15 +43,13 @@ async def extract_amount(file: UploadFile = File(...)):
             mime_type = "image/png"
         elif filename_lower.endswith(".webp"):
             mime_type = "image/webp"
-        elif filename_lower.endswith(".heic"):
-            mime_type = "image/heic"
         else:
-            mime_type = file.content_type or "image/jpeg"
+            mime_type = "image/jpeg"
 
         print(f"Processing file: {file.filename} with mime_type: {mime_type}")
 
-        # **เปลี่ยนเป็น gemini-1.5-flash**
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        # ใช้ Endpoint และ Model ล่าสุด
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
         
         prompt = (
             "Analyze this receipt or slip image carefully and extract the final total paid amount "
@@ -73,10 +71,7 @@ async def extract_amount(file: UploadFile = File(...)):
                         }
                     ]
                 }
-            ],
-            "generationConfig": {
-                "temperature": 0.1
-            }
+            ]
         }
 
         req = urllib.request.Request(
@@ -90,9 +85,9 @@ async def extract_amount(file: UploadFile = File(...)):
             with urllib.request.urlopen(req) as response:
                 res_data = json.loads(response.read().decode('utf-8'))
         except urllib.error.HTTPError as http_err:
-            err_msg = http_err.read().decode('utf-8')
-            print(f"Gemini API HTTP Error: {err_msg}")
-            return {"success": False, "error": f"API Error: {http_err.code}", "amount": 0.0}
+            err_body = http_err.read().decode('utf-8')
+            print(f"Gemini API HTTP Error ({http_err.code}): {err_body}")
+            return {"success": False, "error": f"API Error: {http_err.code} - {err_body}", "amount": 0.0}
 
         candidates = res_data.get('candidates', [])
         if not candidates:

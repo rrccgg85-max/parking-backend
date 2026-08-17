@@ -2,7 +2,6 @@ const express = require('express');
 const multer = require('multer');
 const pdfParse = require('pdf-parse');
 const cors = require('cors');
-const Tesseract = require('tesseract.js');
 
 const app = express();
 app.use(cors());
@@ -12,7 +11,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 function parseAmountFromText(text) {
   if (!text) return 0.0;
 
-  // จัดการช่องว่างระหว่างตัวเลข เช่น '4 0 . 0 0' -> '40.00'
+  // จัดการช่องว่างตัวเลข
   let cleaned = text.replace(/(\d)\s+(\d)/g, '$1$2');
   cleaned = cleaned.replace(/(\d)\s*\.\s*(\d)/g, '$1.$2');
 
@@ -40,7 +39,7 @@ function parseAmountFromText(text) {
 }
 
 app.get('/', (req, res) => {
-  res.json({ status: 'online', mode: 'node_ocr_smart' });
+  res.json({ status: 'online', mode: 'stable_node_server' });
 });
 
 app.post('/extract', upload.single('file'), async (req, res) => {
@@ -50,44 +49,12 @@ app.post('/extract', upload.single('file'), async (req, res) => {
     }
 
     let extractedText = '';
-    const filename = req.file.originalname.toLowerCase();
-    const isPdf = req.file.mimetype === 'application/pdf' || filename.endsWith('.pdf');
 
-    if (isPdf) {
-      // 1. ลองอ่านด้วย pdf-parse ก่อน (กรณีเป็น PDF ข้อความปกติ)
-      try {
-        const pdfData = await pdfParse(req.file.buffer);
-        extractedText = pdfData.text || '';
-      } catch (e) {
-        console.log('pdf-parse fallback error:', e);
-      }
-
-      // 2. ถ้า pdf-parse ได้ข้อความว่างเปล่า แปลว่าเป็น PDF แบบรูปภาพ ให้ใช้ Tesseract OCR อ่านต่อทันที
-      if (!extractedText.trim()) {
-        console.log('PDF has no text layer, running Tesseract.js OCR...');
-        try {
-          const { data: { text } } = await Tesseract.recognize(
-            req.file.buffer,
-            'tha+eng',
-            { logger: m => {} }
-          );
-          extractedText = text || '';
-        } catch (ocrErr) {
-          console.log('Tesseract OCR error:', ocrErr);
-        }
-      }
+    if (req.file.mimetype === 'application/pdf' || req.file.originalname.toLowerCase().endsWith('.pdf')) {
+      const pdfData = await pdfParse(req.file.buffer);
+      extractedText = pdfData.text || '';
     } else {
-      // กรณีอัปโหลดไฟล์รูปภาพโดยตรง (JPG, PNG)
-      try {
-        const { data: { text } } = await Tesseract.recognize(
-          req.file.buffer,
-          'tha+eng',
-          { logger: m => {} }
-        );
-        extractedText = text || '';
-      } catch (ocrErr) {
-        console.log('Image OCR error:', ocrErr);
-      }
+      return res.status(400).json({ success: false, error: 'รองรับเฉพาะไฟล์ PDF', amount: 0.0 });
     }
 
     const amount = parseAmountFromText(extractedText);
@@ -99,8 +66,8 @@ app.post('/extract', upload.single('file'), async (req, res) => {
       raw_text: extractedText.trim().substring(0, 300)
     });
 
-  } catch (err) {
-    console.error('Extraction Error:', err);
+  } cat (err) {
+    console.error('Server Error:', err);
     return res.status(500).json({ success: false, error: err.message, amount: 0.0 });
   }
 });

@@ -66,7 +66,7 @@ app.post('/extract', upload.single('file'), async (req, res) => {
       raw_text: extractedText.trim().substring(0, 300)
     });
 
-  } cat (err) {
+  } catch (err) {
     console.error('Server Error:', err);
     return res.status(500).json({ success: false, error: err.message, amount: 0.0 });
   }

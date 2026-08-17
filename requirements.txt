@@ -1,8 +1,6 @@
 fastapi
 uvicorn
 python-multipart
+pdfplumber
+PyMuPDF
 Pillow
-pillow-heif
-pytesseract
-pypdf
-pypdfium2

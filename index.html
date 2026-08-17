@@ -3,35 +3,32 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ระบบสแกนสลิปค่าจอดรถด้วย AI</title>
+    <title>ระบบสแกนสลิปค่าจอดรถ (Standalone OCR)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen flex items-center justify-center p-4">
 
     <div class="bg-slate-800 p-8 rounded-2xl shadow-2xl max-w-lg w-full border border-slate-700">
-        <!-- Header -->
         <div class="text-center mb-6">
             <div class="inline-flex items-center justify-center w-16 h-16 bg-blue-600/20 text-blue-400 rounded-full mb-3">
                 <i class="fa-solid fa-file-invoice-dollar text-3xl"></i>
             </div>
             <h1 class="text-2xl font-bold text-white">ระบบแกะยอดเงินสลิปจอดรถ</h1>
-            <p class="text-slate-400 text-sm mt-1">อัปโหลดสลิปหรือใบเสร็จ (AI จะดึงยอดเงินให้อัตโนมัติ)</p>
+            <p class="text-slate-400 text-sm mt-1">อัปโหลดสลิปหรือใบเสร็จ (Standalone OCR Engine)</p>
         </div>
 
         <form id="parkingForm" class="space-y-5">
-            <!-- Drop Zone / File Input -->
             <div>
                 <label class="block text-sm font-medium mb-2 text-slate-300">อัปโหลดไฟล์ (JPG, PNG, PDF)</label>
                 <div id="dropZone" class="border-2 border-dashed border-slate-600 hover:border-blue-500 rounded-xl p-6 text-center cursor-pointer transition bg-slate-800/50 hover:bg-slate-700/50">
                     <input type="file" id="fileInput" accept="image/*,.pdf" class="hidden">
                     <i class="fa-solid fa-cloud-arrow-up text-4xl text-slate-400 mb-2" id="uploadIcon"></i>
                     <p id="fileNameDisplay" class="text-sm text-slate-300 font-medium">คลิกเพื่อเลือกไฟล์ หรือลากไฟล์มาวางที่นี่</p>
-                    <p class="text-xs text-slate-500 mt-1">รองรับขนาดไม่เกิน 10MB</p>
+                    <p class="text-xs text-slate-500 mt-1">รองรับ JPG, PNG, WEBP และ PDF</p>
                 </div>
             </div>
 
-            <!-- Preview Container -->
             <div id="previewContainer" class="hidden text-center">
                 <img id="imagePreview" class="max-h-48 mx-auto rounded-lg border border-slate-600 shadow-md hidden" alt="Slip Preview">
                 <div id="pdfPreview" class="hidden p-4 bg-slate-700/50 rounded-lg text-slate-300 text-sm">
@@ -40,7 +37,6 @@
                 </div>
             </div>
 
-            <!-- Amount Input -->
             <div>
                 <label class="block text-sm font-medium mb-1 text-slate-300">ยอดเงินค่าจอดรถที่ตรวจพบ (บาท)</label>
                 <div class="relative">
@@ -50,7 +46,6 @@
                 </div>
             </div>
 
-            <!-- Submit Button -->
             <button type="submit" id="submitBtn"
                 class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl transition shadow-lg shadow-blue-600/30 flex items-center justify-center space-x-2">
                 <i class="fa-solid fa-paper-plane"></i>
@@ -58,19 +53,17 @@
             </button>
         </form>
 
-        <!-- Loading Overlay -->
         <div id="loading" class="hidden mt-6 text-center bg-blue-950/40 p-4 rounded-xl border border-blue-800/50">
             <div class="inline-block animate-spin rounded-full h-8 w-8 border-3 border-blue-400 border-t-transparent mb-2"></div>
-            <p class="text-blue-300 text-sm font-medium">กำลังประมวลผลสลิปด้วย AI...</p>
-            <p class="text-slate-400 text-xs mt-1">โปรดรอสักครู่ ระบบกำลังแกะตัวเลขยอดเงิน</p>
+            <p class="text-blue-300 text-sm font-medium">กำลังอ่านข้อมูลจากไฟล์ด้วย OCR...</p>
+            <p class="text-slate-400 text-xs mt-1">โปรดรอสักครู่ ระบบกำลังประมวลผลบน Server</p>
         </div>
 
-        <!-- Alert Notification -->
         <div id="alertBox" class="hidden mt-4 p-3 rounded-lg text-xs font-medium"></div>
     </div>
 
     <script>
-        // 🚨 อย่าลืมตรวจสอบและแก้ไข URL Backend ของคุณตรงนี้
+        // เปลี่ยนเป็น URL Render ของคุณ
         const BACKEND_URL = "https://parking-backend-o2e3.onrender.com";
 
         const dropZone = document.getElementById('dropZone');
@@ -84,7 +77,6 @@
         const pdfPreview = document.getElementById('pdfPreview');
         const previewContainer = document.getElementById('previewContainer');
 
-        // Drag & Drop Handlers
         dropZone.addEventListener('click', () => fileInput.click());
         dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('border-blue-500'); });
         dropZone.addEventListener('dragleave', () => dropZone.classList.remove('border-blue-500'));
@@ -107,7 +99,6 @@
             fileNameDisplay.innerText = file.name;
             showAlert("", "hide");
 
-            // Handle Preview
             previewContainer.classList.remove('hidden');
             if (file.type.startsWith('image/')) {
                 const reader = new FileReader();
@@ -123,11 +114,10 @@
                 document.getElementById('pdfName').innerText = file.name;
             }
 
-            // Trigger AI Extraction
-            await processFileWithAI(file);
+            await processFileWithBackend(file);
         }
 
-        async function processFileWithAI(file) {
+        async function processFileWithBackend(file) {
             const formData = new FormData();
             formData.append('file', file);
 
@@ -145,10 +135,10 @@
 
                 if (data.success && data.amount > 0) {
                     amountInput.value = data.amount.toFixed(2);
-                    showAlert(`อ่านยอดเงินสำเร็จ: ฿${data.amount.toFixed(2)}`, "success");
+                    showAlert(`แกะยอดเงินสำเร็จ: ฿${data.amount.toFixed(2)}`, "success");
                 } else {
-                    showAlert(data.error || "ระบบไม่พบบทสรุปยอดเงิน โปรดระบุด้วยตนเอง", "warning");
-                    const userAmount = prompt("ระบบแกะยอดเงินอัตโนมัติไม่สำเร็จ โปรดระบุยอดเงินค่าจอดรถ (บาท):", "0.00");
+                    showAlert(data.error || "OCR ไม่พบบทสรุปยอดเงิน โปรดระบุด้วยตนเอง", "warning");
+                    const userAmount = prompt("OCR ไม่สามารถอ่านยอดเงินได้อัตโนมัติ โปรดระบุยอดเงินค่าจอดรถ (บาท):", "0.00");
                     if (userAmount !== null) {
                         amountInput.value = parseFloat(userAmount) || 0;
                     }

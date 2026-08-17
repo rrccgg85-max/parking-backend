@@ -5,9 +5,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, UnidentifiedImageError
 import pytesseract
 import pypdf
+import pypdfium2 as pdfium
 import pillow_heif
 
-# ลงทะเบียนรองรับภาพ HEIC จาก iPhone
 pillow_heif.register_heif_opener()
 
 app = FastAPI()
@@ -20,84 +20,102 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def parse_amount_from_text(text: str) -> float:
+    if not text:
+        return 0.0
+
+    # รวมตัวเลขที่ถูกแยกช่องว่าง เช่น '4 0 . 0 0' -> '40.00'
+    cleaned_text = re.sub(r'(\d)\s+(\d)', r'\1\2', text)
+    cleaned_text = re.sub(r'(\d)\s*\.\s*(\d)', r'\1.\2', cleaned_text)
+
+    # 1. ค้นหาตัวเลขที่อยู่ใกล้คำสำคัญ (รวมทั้งสิ้น, รวม, ยอดชำระ, Total, บาท)
+    keyword_patterns = [
+        r'(?:รวมทั้งสิ้น|รวมสุทธิ|รวม|ยอดชำระ|สุทธิ|total|amount|paid)[\s:]*([0-9,]+(?:\.[0-9]{2})?)',
+        r'([0-9,]+(?:\.[0-9]{2})?)\s*(?:บาท|baht)'
+    ]
+
+    for pattern in keyword_patterns:
+        matches = re.findall(pattern, cleaned_text, re.IGNORECASE)
+        if matches:
+            for match in reversed(matches):
+                try:
+                    val = float(match.replace(',', ''))
+                    if val > 0:
+                        return val
+                except ValueError:
+                    continue
+
+    # 2. ค้นหาตัวเลขทศนิยมทั่วไป (.XX)
+    general_matches = re.findall(r'(\d{1,3}(?:,\d{3})*\.\d{2})', cleaned_text)
+    if general_matches:
+        for match in reversed(general_matches):
+            try:
+                val = float(match.replace(',', ''))
+                if val > 0:
+                    return val
+            except ValueError:
+                continue
+
+    return 0.0
+
 @app.get("/")
 def read_root():
-    return {"status": "online", "mode": "standalone_ocr_v4"}
+    return {"status": "online", "mode": "standalone_ocr_v5"}
 
 @app.post("/extract")
 async def extract_amount(file: UploadFile = File(...)):
     try:
         await file.seek(0)
         contents = await file.read()
-        
+
         if not contents:
-            return {"success": False, "error": "ไฟล์ที่อัปโหลดไม่มีข้อมูล", "amount": 0.0}
+            return {"success": False, "error": "ไฟล์ไม่มีข้อมูล", "amount": 0.0}
 
         filename = (file.filename or "").lower()
         content_type = (file.content_type or "").lower()
         extracted_text = ""
 
-        # ตรวจสอบว่าเป็นไฟล์ PDF หรือไม่
         is_pdf = filename.endswith(".pdf") or "pdf" in content_type or contents.startswith(b"%PDF")
 
         if is_pdf:
-            # 1. ประมวลผลไฟล์ PDF
+            # 1. ดึงข้อความดิบจาก PDF
             try:
                 pdf_reader = pypdf.PdfReader(io.BytesIO(contents))
-                
-                # 1.1 อ่านข้อความจาก PDF ดั้งเดิม
                 for page in pdf_reader.pages:
-                    text = page.extract_text()
-                    if text:
-                        extracted_text += text + "\n"
+                    t = page.extract_text()
+                    if t:
+                        extracted_text += t + "\n"
+            except Exception as e:
+                print(f"pypdf extract error: {e}")
 
-                # 1.2 หากเป็น Scanned PDF (ไม่มี Text) ให้แกะภาพใน PDF มาทำ OCR
-                if not extracted_text.strip():
-                    for page in pdf_reader.pages:
-                        for img_file in page.images:
-                            try:
-                                image = Image.open(io.BytesIO(img_file.data))
-                                if image.mode != "RGB":
-                                    image = image.convert("RGB")
-                                txt = pytesseract.image_to_string(image, lang='tha+eng')
-                                extracted_text += txt + "\n"
-                            except Exception as img_ocr_err:
-                                print(f"Error OCR image inside PDF: {img_ocr_err}")
-            except Exception as pdf_err:
-                return {"success": False, "error": f"อ่านไฟล์ PDF ไม่สำเร็จ: {str(pdf_err)}", "amount": 0.0}
+            # 2. Render หน้า PDF เป็นรูปภาพเพื่อรัน OCR ซ้ำอีกรอบ (กันเหนียวสำหรับ Vector PDF/Scanned PDF)
+            try:
+                pdf_doc = pdfium.PdfDocument(contents)
+                for page in pdf_doc:
+                    pil_image = page.render(scale=2).to_pil()
+                    try:
+                        ocr_t = pytesseract.image_to_string(pil_image, lang='tha+eng')
+                    except Exception:
+                        ocr_t = pytesseract.image_to_string(pil_image, lang='eng')
+                    extracted_text += "\n" + ocr_t
+            except Exception as pdfium_err:
+                print(f"pdfium render error: {pdfium_err}")
 
         else:
-            # 2. ประมวลผลไฟล์รูปภาพ (JPG, PNG, WEBP, HEIC)
+            # 3. กรณีเป็นไฟล์รูปภาพปกติ
             try:
                 image = Image.open(io.BytesIO(contents))
                 if image.mode != "RGB":
                     image = image.convert("RGB")
-                
                 try:
                     extracted_text = pytesseract.image_to_string(image, lang='tha+eng')
                 except Exception:
                     extracted_text = pytesseract.image_to_string(image, lang='eng')
-
             except UnidentifiedImageError:
-                return {
-                    "success": False, 
-                    "error": "ไม่สามารถอ่านไฟล์รูปภาพนี้ได้ โปรดใช้อัปโหลดไฟล์ JPG, PNG หรือ PDF มาตรฐาน", 
-                    "amount": 0.0
-                }
-            except Exception as img_err:
-                return {
-                    "success": False, 
-                    "error": f"เปิดรูปภาพไม่สำเร็จ: {str(img_err)}", 
-                    "amount": 0.0
-                }
+                return {"success": False, "error": "รูปแบบรูปภาพไม่ถูกต้อง", "amount": 0.0}
 
-        # 3. ค้นหายอดเงินทศนิยม
-        amount_matches = re.findall(r'(\d{1,3}(?:,\d{3})*\.\d{2})', extracted_text)
-
-        extracted_amount = 0.0
-        if amount_matches:
-            clean_amount = amount_matches[-1].replace(',', '')
-            extracted_amount = float(clean_amount)
+        # แกะยอดเงินจากข้อความ
+        extracted_amount = parse_amount_from_text(extracted_text)
 
         return {
             "success": True if extracted_amount > 0 else False,
@@ -107,5 +125,4 @@ async def extract_amount(file: UploadFile = File(...)):
         }
 
     except Exception as e:
-        print(f"General Error: {str(e)}")
         return {"success": False, "error": str(e), "amount": 0.0}

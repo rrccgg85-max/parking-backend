@@ -3,6 +3,7 @@ import json
 import re
 import base64
 import urllib.request
+import urllib.error
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -26,22 +27,40 @@ def read_root():
 async def extract_amount(file: UploadFile = File(...)):
     try:
         if not GEMINI_API_KEY:
+            print("Error: GEMINI_API_KEY is missing!")
             return {"success": False, "error": "GEMINI_API_KEY is not set", "amount": 0.0}
 
+        # อ่านข้อมูลไฟล์รูปภาพ/เอกสาร
         contents = await file.read()
+        if not contents:
+            return {"success": False, "error": "Uploaded file is empty", "amount": 0.0}
+
         base64_data = base64.b64encode(contents).decode('utf-8')
         
-        mime_type = file.content_type or "image/jpeg"
-        if file.filename.lower().endswith(".pdf"):
+        # ตรวจสอบและระบุ MIME Type ให้ถูกต้อง
+        filename_lower = file.filename.lower()
+        if filename_lower.endswith(".pdf"):
             mime_type = "application/pdf"
+        elif filename_lower.endswith(".png"):
+            mime_type = "image/png"
+        elif filename_lower.endswith(".webp"):
+            mime_type = "image/webp"
+        elif filename_lower.endswith(".heic"):
+            mime_type = "image/heic"
+        else:
+            mime_type = file.content_type or "image/jpeg"
 
+        print(f"Processing file: {file.filename} with mime_type: {mime_type}")
+
+        # เรียกใช้งาน Gemini 2.5 Flash REST API
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
         
-        prompt = """
-        Analyze this receipt document and extract the total paid amount (รวมทั้งสิ้น / ยอดชำระ).
-        Return ONLY a JSON object format: {"amount": 40.00}
-        If you cannot find any amount, return {"amount": 0.0}
-        """
+        prompt = (
+            "Analyze this receipt or slip image carefully and extract the final total paid amount "
+            "(เช่น จำนวนเงิน, ยอดชำระ, รวมทั้งสิ้น, Net Total, Grand Total).\n"
+            "Respond ONLY with a valid JSON object matching this exact format: {\"amount\": 150.00}.\n"
+            "If no amount can be extracted or found, return {\"amount\": 0.0}."
+        )
 
         payload = {
             "contents": [
@@ -56,7 +75,10 @@ async def extract_amount(file: UploadFile = File(...)):
                         }
                     ]
                 }
-            ]
+            ],
+            "generationConfig": {
+                "temperature": 0.1
+            }
         }
 
         req = urllib.request.Request(
@@ -66,14 +88,27 @@ async def extract_amount(file: UploadFile = File(...)):
             method='POST'
         )
 
-        with urllib.request.urlopen(req) as response:
-            res_data = json.loads(response.read().decode('utf-8'))
-            
-        res_text = res_data['candidates'][0]['content']['parts'][0]['text'].strip()
-        
+        try:
+            with urllib.request.urlopen(req) as response:
+                res_data = json.loads(response.read().decode('utf-8'))
+        except urllib.error.HTTPError as http_err:
+            err_msg = http_err.read().decode('utf-8')
+            print(f"Gemini API HTTP Error: {err_msg}")
+            return {"success": False, "error": f"API Error: {http_err.code}", "amount": 0.0}
+
+        # สกัดข้อความคำตอบจาก Gemini
+        candidates = res_data.get('candidates', [])
+        if not candidates:
+            return {"success": False, "error": "No response candidate from Gemini", "amount": 0.0}
+
+        res_text = candidates[0]['content']['parts'][0]['text'].strip()
+        print(f"Gemini Raw Response: {res_text}")
+
+        # ใช้ Regex ค้นหาโครงสร้าง JSON ในคำตอบ
         match = re.search(r'\{.*\}', res_text, re.DOTALL)
         if match:
-            data = json.loads(match.group())
+            json_str = match.group()
+            data = json.loads(json_str)
             extracted_amount = float(data.get("amount", 0.0))
         else:
             extracted_amount = 0.0
@@ -85,4 +120,5 @@ async def extract_amount(file: UploadFile = File(...)):
         }
 
     except Exception as e:
+        print(f"General Error: {str(e)}")
         return {"success": False, "error": str(e), "amount": 0.0}

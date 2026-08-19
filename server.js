@@ -1,89 +1,82 @@
 const express = require('express');
 const multer = require('multer');
-const pdfParse = require('pdf-parse');
+const { PDFDocument } = require('pdf-lib');
 const cors = require('cors');
+const Tesseract = require('tesseract.js');
+const { pdf } = require('pdf-to-img');
 
 const app = express();
-app.use(cors());
-
 const upload = multer({ storage: multer.memoryStorage() });
 
-function parseAmountFromText(text) {
-  if (!text) return 0.0;
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
 
-  // ทำความสะอาดข้อความ ตัดช่องว่างระหว่างตัวเลข
-  let cleaned = text.replace(/(\d)\s+(\d)/g, '$1$2');
-  cleaned = cleaned.replace(/(\d)\s*\.\s*(\d)/g, '$1.$2');
+// API ประมวลผล PDF & OCR ใบเสร็จ
+app.post('/api/process-receipts', upload.array('files'), async (req, res) => {
+    try {
+        const files = req.files;
+        if (!files || files.length === 0) {
+            return res.status(400).json({ success: false, message: 'กรุณาเลือกไฟล์ PDF' });
+        }
 
-  // 1. ค้นหาจากคีย์เวิร์ดที่มักอยู่ใกล้กับยอดเงิน
-  const patterns = [
-    /รวมทั้งสิ้น\s*([0-9,]+(?:\.[0-9]{2})?)/i,
-    /([0-9,]+(?:\.[0-9]{2})?)\s*บาท/i,
-    /(?:รวม|ยอดชำระ|สุทธิ|จำนวนเงิน|total|amount|price)[\s:]*([0-9,]+(?:\.[0-9]{2})?)/i
-  ];
+        const results = [];
+        const mergedPdf = await PDFDocument.create();
 
-  for (const pattern of patterns) {
-    const match = cleaned.match(pattern);
-    if (match && match[1]) {
-      const val = parseFloat(match[1].replace(/,/g, ''));
-      if (val > 0) return val;
+        for (const file of files) {
+            // 1. รวม PDF
+            try {
+                const pdfDoc = await PDFDocument.load(file.buffer);
+                const copiedPages = await mergedPdf.copyPages(pdfDoc, pdfDoc.getPageIndices());
+                copiedPages.forEach(page => mergedPdf.addPage(page));
+            } catch (e) {
+                console.log(`ไม่สามารถอ่านไฟล์ ${file.originalname} ได้`);
+            }
+
+            // 2. OCR อ่านยอดเงินจากใบเสร็จ
+            let amount = 0;
+            try {
+                const document = await pdf(file.buffer, { scale: 2 });
+                let firstPageImg = null;
+                for await (const page of document) {
+                    firstPageImg = page;
+                    break;
+                }
+
+                if (firstPageImg) {
+                    const { data: { text } } = await Tesseract.recognize(firstPageImg, 'tha+eng');
+                    
+                    // ดึงตัวเลขยอดเงินด้วย Regex
+                    const matches = text.match(/(?:รวม|ชำระ|สุทธิ|จำนวนเงิน|ค่าจอด|ยอด|TOTAL|AMOUNT|NET|บาท|BAHT|THB)\D{0,15}(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+)/gi);
+                    if (matches && matches.length > 0) {
+                        const num = matches[matches.length - 1].match(/(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+)/);
+                        if (num) amount = parseFloat(num[0].replace(/,/g, ''));
+                    } else {
+                        const decimals = text.match(/\b\d{1,4}\.\d{2}\b/g);
+                        if (decimals && decimals.length > 0) amount = parseFloat(decimals[decimals.length - 1]);
+                    }
+                }
+            } catch (ocrErr) {
+                console.log(`⚠️ OCR อ่านไฟล์ ${file.originalname} ไม่สำเร็จ:`, ocrErr.message);
+            }
+
+            results.push({ 
+                id: Date.now() + Math.random().toString(36).substring(2, 5), // Unique ID
+                fileName: file.originalname, 
+                amount: amount,
+                date: new Date().toLocaleDateString('th-TH')
+            });
+        }
+
+        const pdfBytes = await mergedPdf.save();
+        const base64Pdf = Buffer.from(pdfBytes).toString('base64');
+
+        res.json({ success: true, items: results, newPdfBase64: base64Pdf });
+
+    } catch (error) {
+        console.error("Server Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
-  }
-
-  // 2. ถ้าไม่เจอคีย์เวิร์ด ให้ดึงตัวเลขที่มีทศนิยม .00 หรือ .xx ตัวสุดท้ายในเอกสารแทน
-  const allDecimals = cleaned.match(/(\d{1,3}(?:,\d{3})*\.\d{2})/g);
-  if (allDecimals && allDecimals.length > 0) {
-    const lastVal = parseFloat(allDecimals[allDecimals.length - 1].replace(/,/g, ''));
-    if (lastVal > 0) return lastVal;
-  }
-
-  // 3. ถ้ายังไม่เจออีก ให้หาตัวเลขจำนวนเต็มที่มีค่ามากที่สุดในเอกสาร (เผื่อเป็นยอดรวม)
-  const allNumbers = cleaned.match(/\b\d{1,6}\b/g);
-  if (allNumbers && allNumbers.length > 0) {
-    const numbers = allNumbers.map(n => parseInt(n, 10)).filter(n => n > 0);
-    if (numbers.length > 0) {
-      return Math.max(...numbers);
-    }
-  }
-
-  return 0.0;
-}
-
-app.get('/', (req, res) => {
-  res.json({ status: 'online', mode: 'flexible_parser' });
 });
 
-app.post('/extract', upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, error: 'ไม่พบไฟล์ที่อัปโหลด', amount: 0.0 });
-    }
-
-    let extractedText = '';
-
-    if (req.file.mimetype === 'application/pdf' || req.file.originalname.toLowerCase().endsWith('.pdf')) {
-      const pdfData = await pdfParse(req.file.buffer);
-      extractedText = pdfData.text || '';
-    } else {
-      return res.status(400).json({ success: false, error: 'รองรับเฉพาะไฟล์ PDF', amount: 0.0 });
-    }
-
-    const amount = parseAmountFromText(extractedText);
-
-    return res.json({
-      success: amount > 0,
-      amount: amount,
-      filename: req.file.originalname,
-      raw_text: extractedText.trim().substring(0, 300)
-    });
-
-  } catch (err) {
-    console.error('Server Error:', err);
-    return res.status(500).json({ success: false, error: err.message, amount: 0.0 });
-  }
-});
-
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Server พร้อมทำงานที่ http://localhost:${PORT}`));

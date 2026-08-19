@@ -10,6 +10,10 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
+// เพิ่มโค้ดนี้ไว้ก่อนส่วน app.listen หรือใต้ app.use(cors());
+app.get('/', (req, res) => {
+  res.json({ status: 'online', message: 'Parking Backend is running successfully!' });
+});
 
 // API ประมวลผล PDF & OCR ใบเสร็จ
 app.post('/api/process-receipts', upload.array('files'), async (req, res) => {

@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบรวมใบเสร็จค่าจอดรถ (บันทึกลงเครื่อง)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100 min-h-screen pb-10">
+
+    <!-- Header -->
+    <div class="bg-blue-600 text-white p-4 shadow-md text-center">
+        <h1 class="text-xl font-bold"><i class="fa-solid fa-parking mr-2"></i>ระบบจัดการใบเสร็จค่าจอดรถ</h1>
+        <p class="text-xs text-blue-100 mt-1">บันทึกประวัติอัตโนมัติในเบราว์เซอร์มือถือ</p>
+    </div>
+
+    <div class="max-w-md mx-auto mt-4 px-4">
+
+        <!-- ปุ่มอัปโหลด -->
+        <div class="bg-white p-4 rounded-xl shadow-sm mb-4 border border-gray-200 text-center">
+            <label for="fileInput" class="cursor-pointer flex flex-col items-center justify-center p-4 border-2 border-dashed border-blue-400 rounded-lg hover:bg-blue-50 transition">
+                <i class="fa-solid fa-cloud-arrow-up text-3xl text-blue-500 mb-2"></i>
+                <span class="font-medium text-gray-700">แตะเพื่ออัปโหลดไฟล์ PDF ใบเสร็จ</span>
+                <span class="text-xs text-gray-400 mt-1">(เลือกได้หลายไฟล์พร้อมกัน)</span>
+            </label>
+            <input type="file" id="fileInput" multiple accept="application/pdf" class="hidden" onchange="uploadFiles(event)">
+        </div>
+
+        <!-- ตัวหมุนโหลด -->
+        <div id="loading" class="hidden text-center my-4 p-4 bg-white rounded-xl shadow-sm">
+            <i class="fa-solid fa-circle-notch fa-spin text-3xl text-blue-500 mb-2"></i>
+            <p class="text-sm font-medium text-gray-600">กำลังอ่านข้อมูลใบเสร็จด้วย OCR...</p>
+        </div>
+
+        <!-- แสดงยอดรวม -->
+        <div class="bg-gradient-to-r from-blue-500 to-indigo-600 text-white p-4 rounded-xl shadow-md mb-4 flex justify-between items-center">
+            <div>
+                <p class="text-xs opacity-80">ยอดรวมทั้งหมด (<span id="itemCount">0</span> รายการ)</p>
+                <p class="text-2xl font-extrabold mt-1">฿<span id="totalAmount">0.00</span></p>
+            </div>
+            <button onclick="clearAll()" class="bg-red-500 hover:bg-red-600 text-white text-xs px-3 py-2 rounded-lg transition shadow">
+                <i class="fa-solid fa-trash-can mr-1"></i>ล้างประวัติ
+            </button>
+        </div>
+
+        <!-- รายการใบเสร็จ -->
+        <div id="receiptList" class="space-y-3">
+            <!-- รายการจะถูกเพิ่มตรงนี้ด้วย JavaScript -->
+        </div>
+
+    </div>
+
+    <script>
+        // กำหนด URL ของ Server (เปลี่ยนเป็น URL บน Render เมื่อนำขึ้น Cloud)
+        const SERVER_URL = 'https://parking-backend-8stn.onrender.com';
+        
+        let receiptsData = [];
+
+        // เมื่อโหลดหน้าเว็บ ให้ดึงข้อมูลเก่าจาก Browser มือถือทันที
+        window.onload = () => {
+            loadHistoryFromBrowser();
+        };
+
+        // 💾 โหลดข้อมูลจาก localStorage
+        function loadHistoryFromBrowser() {
+            const savedData = localStorage.getItem('my_parking_receipts');
+            if (savedData) {
+                try {
+                    receiptsData = JSON.parse(savedData);
+                } catch (e) {
+                    console.error("ไม่สามารถอ่านข้อมูลประวัติได้", e);
+                    receiptsData = [];
+                }
+            }
+            updateUI();
+        }
+
+        // 💾 บันทึกข้อมูลลง localStorage
+        function saveHistoryToBrowser() {
+            localStorage.setItem('my_parking_receipts', JSON.stringify(receiptsData));
+        }
+
+        // อัปโหลดไฟล์ไปให้ Server อ่าน OCR
+        async function uploadFiles(event) {
+            const files = event.target.files;
+            if (!files.length) return;
+
+            const formData = new FormData();
+            for (let file of files) formData.append('files', file);
+
+            document.getElementById('loading').classList.remove('hidden');
+
+            try {
+                const response = await fetch(`${SERVER_URL}/api/process-receipts`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    // เพิ่มรายการใหม่เข้า Array
+                    receiptsData = [...receiptsData, ...result.items];
+
+                    // 💾 เซฟลง Browser ทันที
+                    saveHistoryToBrowser();
+                    updateUI();
+                } else {
+                    alert('เกิดข้อผิดพลาด: ' + result.message);
+                }
+            } catch (err) {
+                alert('ไม่สามารถเชื่อมต่อ Server ได้ (ตรวจสอบว่าเปิด node server.js หรือยัง)');
+            } finally {
+                document.getElementById('loading').classList.add('hidden');
+                event.target.value = '';
+            }
+        }
+
+        // แก้ไขยอดเงิน
+        function updateAmount(index, val) {
+            receiptsData[index].amount = parseFloat(val) || 0;
+            saveHistoryToBrowser(); // 💾 บันทึกค่าที่แก้ไข
+            calculateTotal();
+        }
+
+        // ลบรายการเดี่ยว
+        function removeItem(index) {
+            receiptsData.splice(index, 1);
+            saveHistoryToBrowser(); // 💾 บันทึกการลบ
+            updateUI();
+        }
+
+        // ล้างประวัติทั้งหมด
+        function clearAll() {
+            if (receiptsData.length === 0) return;
+            if (confirm("คุณต้องการลบประวัติใบเสร็จทั้งหมดในเครื่องนี้ใช่หรือไม่?")) {
+                receiptsData = [];
+                localStorage.removeItem('my_parking_receipts'); // 🗑️ ลบจาก Browser
+                updateUI();
+            }
+        }
+
+        // คำนวณยอดรวม
+        function calculateTotal() {
+            const total = receiptsData.reduce((sum, item) => sum + (item.amount || 0), 0);
+            document.getElementById('totalAmount').innerText = total.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            document.getElementById('itemCount').innerText = receiptsData.length;
+        }
+
+        // แสดงผลบนหน้าจอ
+        function updateUI() {
+            const listContainer = document.getElementById('receiptList');
+            listContainer.innerHTML = '';
+
+            if (receiptsData.length === 0) {
+                listContainer.innerHTML = `
+                    <div class="text-center py-8 text-gray-400">
+                        <i class="fa-regular fa-folder-open text-4xl mb-2"></i>
+                        <p class="text-sm">ยังไม่มีประวัติใบเสร็จ</p>
+                    </div>
+                `;
+                calculateTotal();
+                return;
+            }
+
+            receiptsData.forEach((item, index) => {
+                const card = document.createElement('div');
+                card.className = 'bg-white p-3 rounded-xl shadow-sm border border-gray-200 flex items-center justify-between';
+                card.innerHTML = `
+                    <div class="flex-1 pr-2 overflow-hidden">
+                        <p class="text-xs font-semibold text-gray-800 truncate"><i class="fa-regular fa-file-pdf text-red-500 mr-1"></i>${item.fileName}</p>
+                        <p class="text-[10px] text-gray-400 mt-0.5">${item.date || 'วันนี้'}</p>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <div class="relative">
+                            <span class="absolute left-2 top-1.5 text-xs text-gray-500">฿</span>
+                            <input type="number" step="0.01" value="${item.amount}" 
+                                onchange="updateAmount(${index}, this.value)" 
+                                class="w-24 pl-5 pr-2 py-1 text-right text-sm font-bold border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-400 focus:outline-none">
+                        </div>
+                        <button onclick="removeItem(${index})" class="text-gray-400 hover:text-red-500 p-1">
+                            <i class="fa-solid fa-xmark text-lg"></i>
+                        </button>
+                    </div>
+                `;
+                listContainer.appendChild(card);
+            });
+
+            calculateTotal();
+        }
+    </script>
+</body>
+</html>
